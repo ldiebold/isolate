@@ -10,7 +10,8 @@ it('registers the isolate commands', function () {
     expect($commands)
         ->toContain('isolate')
         ->toContain('isolate:status')
-        ->toContain('isolate:list');
+        ->toContain('isolate:list')
+        ->toContain('isolate:teardown');
 });
 
 it('merges the package config as data', function () {

@@ -153,6 +153,22 @@ class Resolver
     }
 
     /**
+     * The primary env keys of every active redis-keyspace name resource (e.g.
+     * REDIS_PREFIX, HORIZON_PREFIX). Teardown reads these to know which resolved
+     * prefixes to flush for an instance.
+     *
+     * @return array<int, string>
+     */
+    public function redisKeyspaceEnvKeys(): array
+    {
+        return collect($this->resources())
+            ->filter(static fn (Resource $resource): bool => $resource instanceof NameResource && $resource->keyspace() === 'redis')
+            ->map(static fn (Resource $resource): string => $resource->primaryEnvKey())
+            ->values()
+            ->all();
+    }
+
+    /**
      * @return array<int, PortResource>
      */
     protected function ports(): array
@@ -184,8 +200,9 @@ class Resolver
         if ($resource->normalizer() === 'database_identifier') {
             $value = $this->deriveDatabaseValue($this->nameBase($resource), $n);
         } else {
-            $base = $this->nameDeriver->stripSuffix($this->nameBase($resource), $this->currentNumber);
-            $value = $this->nameDeriver->derive($base, $n);
+            $width = $this->keyspaceWidth($resource);
+            $base = $this->nameDeriver->stripSuffix($this->nameBase($resource), $this->currentNumber, $width);
+            $value = $this->nameDeriver->derive($base, $n, $width);
         }
 
         $sideEffect = null;
@@ -199,6 +216,23 @@ class Resolver
         }
 
         return [$value, $sideEffect];
+    }
+
+    /**
+     * Zero-pad width for a keyspace resource's instance suffix, so per-instance
+     * prefixes are mutually unambiguous (instance 7 ⇒ "07", never matched by a
+     * scan for instance 70). Derived from max_instances; non-keyspace resources
+     * are not padded.
+     */
+    protected function keyspaceWidth(NameResource $resource): int
+    {
+        if ($resource->keyspace() === null) {
+            return 0;
+        }
+
+        $max = (int) $this->config->get('isolate.max_instances', 50);
+
+        return max(1, strlen((string) max(0, $max - 1)));
     }
 
     /**

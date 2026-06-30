@@ -11,6 +11,8 @@ use Ldiebold\Isolate\Isolate as IsolateService;
  * @method static IsolateService derive(string $env, \Closure|string $resolver)
  * @method static IsolateService after(\Closure|string $callback)
  * @method static IsolateService afterDatabaseCreated(\Closure|string $callback)
+ * @method static IsolateService afterDatabaseDropped(\Closure|string $callback)
+ * @method static IsolateService afterPrefixFlushed(\Closure|string $callback)
  * @method static IsolateService restartUsing(\Closure|string $callback)
  * @method static IsolateService applier(\Ldiebold\Isolate\Contracts\Applier|string $applier)
  * @method static IsolateService collisionDetector(\Ldiebold\Isolate\Contracts\CollisionDetector|string $detector)

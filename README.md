@@ -78,6 +78,28 @@ php artisan isolate:list              # candidate numbers and detected conflict 
 php artisan isolate:list --limit=20   # inspect more candidates (default 10, capped at max_instances)
 ```
 
+Tear down per-instance resources (the inverse of isolation): drops the database(s) **and** flushes
+the Redis keyspace(s):
+
+```bash
+php artisan isolate:teardown 3              # drop instance 3's database and flush its Redis keys (asks to confirm)
+php artisan isolate:teardown 3 --force      # skip the confirmation prompt
+php artisan isolate:teardown 3 --keep-redis # drop the database only; leave Redis keys in place
+php artisan isolate:teardown --all          # tear down every existing instance except vanilla (0) and the active one
+php artisan isolate:teardown 3 --dry-run    # show what would be torn down (with Redis key counts), change nothing
+```
+
+`isolate:teardown` drops the per-instance database(s) and flushes every key under the instance's
+keyspace prefixes (`REDIS_PREFIX`, `HORIZON_PREFIX`) across all configured Redis connections — pass
+`--keep-redis` to leave Redis alone. It never rewrites `.env` — **except** when you tear down the
+_active_ instance with `--force`, where it then resets `.env` to vanilla so the app is not left
+pointing at dropped resources (pass `--keep-env` to opt out). It refuses to drop vanilla (instance 0)
+and refuses the active instance unless you name it explicitly with `--force`; under `--all` the active
+instance is always protected. A missing database is reported rather than treated as an error and an
+empty keyspace is simply "nothing to flush", so re-runs are idempotent; a failed drop or an
+unreachable Redis degrades to a warning and the command still succeeds. To clean up other coupled
+resources, use the `afterDatabaseDropped` / `afterPrefixFlushed` hooks (below).
+
 Running `isolate` with no flags behaves like `--auto`. Re-running is idempotent: a recorded
 `ISOLATE_NUMBER` is preferred, so the same checkout keeps its number, existing databases are
 reused, and the resolved `.env` values stay stable — exactly what you want when an agent re-runs
@@ -93,6 +115,10 @@ Every resource derives its value from one shared instance number `n`:
 | `name`        | `REDIS_PREFIX`          | the configured prefix + suffix(n)        |
 | `name` (db)   | `DB_DATABASE`           | `base + suffix(n)`, normalized + created |
 | `derived`     | `APP_URL`               | the existing URL with its port rewritten |
+
+Redis/Horizon prefixes are marked as keyspaces (`'keyspace' => 'redis'`), which fixed-width
+zero-pads their suffix (instance 7 → `…07`) so one instance's keys can never be matched by a scan
+for another (7 vs 70), and flags them to be flushed on `isolate:teardown`.
 
 At `n = 0` no suffix is added, so names return to their base values. Fresh auto-selection only
 chooses a number whose browser-facing ports avoid Chrome's restricted-port set and whose actual
@@ -128,8 +154,8 @@ default database connection.
 ['type' => 'derived', 'env' => 'APP_URL', 'rewrite_port_of' => 'APP_URL', 'port_from' => 'SERVER_PORT', 'active_when' => 'always'],
 ['type' => 'port', 'env' => ['REVERB_SERVER_PORT', 'REVERB_PORT'], 'base' => 8100, 'browser_facing' => true, 'active_when' => ['package' => 'laravel/reverb']],
 ['type' => 'name', 'env' => 'DB_DATABASE', 'config' => 'database.connections.{default}.database', 'side_effect' => 'create_database', 'normalize' => 'database_identifier', 'active_when' => ['config' => 'database.connections.{default}.database']],
-['type' => 'name', 'env' => 'REDIS_PREFIX',   'config' => 'database.redis.options.prefix', 'active_when' => ['config' => 'database.redis.options.prefix']],
-['type' => 'name', 'env' => 'HORIZON_PREFIX', 'config' => 'horizon.prefix', 'active_when' => ['package' => 'laravel/horizon']],
+['type' => 'name', 'env' => 'REDIS_PREFIX',   'config' => 'database.redis.options.prefix', 'keyspace' => 'redis', 'active_when' => ['config' => 'database.redis.options.prefix']],
+['type' => 'name', 'env' => 'HORIZON_PREFIX', 'config' => 'horizon.prefix', 'keyspace' => 'redis', 'active_when' => ['package' => 'laravel/horizon']],
 ```
 
 #### Band spacing (read this before customising the map)
@@ -165,9 +191,12 @@ Isolate::name('PULSE_PREFIX');
 // Compute a derived env value at runtime (closure or class-string DerivedResolver).
 Isolate::derive('PUSHER_APP_CLUSTER', fn (array $env, int $n) => 'eu-'.$n);
 
-// Run a callback after the plan is applied, or after a database is created.
+// Run a callback after the plan is applied, or after a database is created / dropped,
+// or after a Redis keyspace is flushed (isolate:teardown).
 Isolate::after(fn ($plan, $result) => /* ... */);
 Isolate::afterDatabaseCreated(fn ($result, $plan) => /* ... */);
+Isolate::afterDatabaseDropped(fn ($result, $plan) => /* ... */);  // isolate:teardown; $result is a DropResult
+Isolate::afterPrefixFlushed(fn ($result, $plan) => /* ... */);    // isolate:teardown; $result is a FlushResult ($result->keyCount)
 
 // Fire a restart hook with `isolate --restart` (closure OR cache-safe class-string).
 Isolate::restartUsing(RestartHorizon::class);
@@ -206,12 +235,14 @@ $result->warnings;      // non-fatal conflict / degradation messages
 
 ### Events
 
-Isolate dispatches two events you can listen for:
+Isolate dispatches the following events you can listen for:
 
 - `Ldiebold\Isolate\Events\IsolationApplied` — after a plan is applied (`$plan`, `$result`).
 - `Ldiebold\Isolate\Events\DatabaseCreated` — after a per-instance database is created (`$result`, `$plan`).
+- `Ldiebold\Isolate\Events\DatabaseDropped` — after a per-instance database is dropped by `isolate:teardown` (`$result`, `$plan`). The `$plan` carries the instance's env map (e.g. `REDIS_PREFIX`), so listeners can clean up coupled resources.
+- `Ldiebold\Isolate\Events\PrefixFlushed` — after a per-instance Redis keyspace is flushed by `isolate:teardown` (`$result`, `$plan`); fired once per prefix where keys were removed, with `$result->keyCount`.
 
-The `Isolate::after(...)` and `Isolate::afterDatabaseCreated(...)` callbacks fire alongside these.
+The `Isolate::after(...)`, `Isolate::afterDatabaseCreated(...)`, `Isolate::afterDatabaseDropped(...)` and `Isolate::afterPrefixFlushed(...)` callbacks fire alongside these.
 
 ### Conflict policy
 

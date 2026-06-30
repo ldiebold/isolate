@@ -33,4 +33,14 @@ class NameResource extends Resource
     {
         return isset($this->definition['side_effect']) ? (string) $this->definition['side_effect'] : null;
     }
+
+    /**
+     * The keyspace this name prefixes (e.g. 'redis'), or null. A keyspace marker
+     * makes the resource's suffix fixed-width zero-padded so per-instance prefixes
+     * are mutually unambiguous, and flags it for flushing on teardown.
+     */
+    public function keyspace(): ?string
+    {
+        return isset($this->definition['keyspace']) ? (string) $this->definition['keyspace'] : null;
+    }
 }

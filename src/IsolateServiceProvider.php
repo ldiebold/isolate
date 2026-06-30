@@ -6,6 +6,7 @@ use Illuminate\Support\ServiceProvider;
 use Ldiebold\Isolate\Console\IsolateCommand;
 use Ldiebold\Isolate\Console\ListCommand;
 use Ldiebold\Isolate\Console\StatusCommand;
+use Ldiebold\Isolate\Console\TeardownCommand;
 use Ldiebold\Isolate\Contracts\EnvWriter;
 use Ldiebold\Isolate\Contracts\PackageDetector;
 use Ldiebold\Isolate\Contracts\PortChecker;
@@ -35,6 +36,7 @@ class IsolateServiceProvider extends ServiceProvider
                 IsolateCommand::class,
                 StatusCommand::class,
                 ListCommand::class,
+                TeardownCommand::class,
             ]);
         }
     }

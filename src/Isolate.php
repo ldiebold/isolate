@@ -16,20 +16,33 @@ use Ldiebold\Isolate\CollisionDetectors\RedisPrefixCollisionDetector;
 use Ldiebold\Isolate\Contracts\Applier;
 use Ldiebold\Isolate\Contracts\CollisionDetector;
 use Ldiebold\Isolate\Contracts\EnvWriter;
+use Ldiebold\Isolate\Contracts\KeyspaceFlusher;
 use Ldiebold\Isolate\Contracts\Lock;
 use Ldiebold\Isolate\Contracts\PackageDetector;
 use Ldiebold\Isolate\Contracts\PortChecker;
 use Ldiebold\Isolate\Database\CreateResult;
 use Ldiebold\Isolate\Database\DatabaseCreatorManager;
+use Ldiebold\Isolate\Database\DatabaseDestroyerManager;
+use Ldiebold\Isolate\Database\DatabaseInspector;
+use Ldiebold\Isolate\Database\DropResult;
 use Ldiebold\Isolate\Database\MySqlDatabaseCreator;
+use Ldiebold\Isolate\Database\MySqlDatabaseDestroyer;
 use Ldiebold\Isolate\Database\PostgresDatabaseCreator;
+use Ldiebold\Isolate\Database\PostgresDatabaseDestroyer;
 use Ldiebold\Isolate\Database\SqliteDatabaseCreator;
+use Ldiebold\Isolate\Database\SqliteDatabaseDestroyer;
 use Ldiebold\Isolate\Events\DatabaseCreated;
+use Ldiebold\Isolate\Events\DatabaseDropped;
 use Ldiebold\Isolate\Events\IsolationApplied;
+use Ldiebold\Isolate\Events\PrefixFlushed;
 use Ldiebold\Isolate\Exceptions\ConflictException;
 use Ldiebold\Isolate\Exceptions\InvalidConfigurationException;
 use Ldiebold\Isolate\Exceptions\NoAvailableNumberException;
 use Ldiebold\Isolate\Locking\FileLock;
+use Ldiebold\Isolate\Redis\FlushResult;
+use Ldiebold\Isolate\Redis\KeyspaceFlusherManager;
+use Ldiebold\Isolate\Redis\RawRedisConnectionFactory;
+use Ldiebold\Isolate\Redis\RedisKeyspaceFlusher;
 use Ldiebold\Isolate\Resources\Resource;
 use Ldiebold\Isolate\Support\BandValidator;
 use Ldiebold\Isolate\Support\DatabaseNameNormalizer;
@@ -38,6 +51,7 @@ use Ldiebold\Isolate\Support\ResourceActivator;
 use Ldiebold\Isolate\Support\RestrictedPorts;
 use Ldiebold\Isolate\Support\SqlitePath;
 use Ldiebold\Isolate\Support\TemplateResolver;
+use Ldiebold\Isolate\Teardown\TeardownPlanner;
 
 /**
  * The core service behind the Isolate facade. Configuration stays pure data in
@@ -75,6 +89,16 @@ class Isolate
      * @var array<int, Closure|class-string>
      */
     protected array $afterDatabaseCreated = [];
+
+    /**
+     * @var array<int, Closure|class-string>
+     */
+    protected array $afterDatabaseDropped = [];
+
+    /**
+     * @var array<int, Closure|class-string>
+     */
+    protected array $afterPrefixFlushed = [];
 
     /**
      * @var array<int, Closure|class-string>
@@ -148,6 +172,26 @@ class Isolate
     public function afterDatabaseCreated(Closure|string $callback): static
     {
         $this->afterDatabaseCreated[] = $callback;
+
+        return $this;
+    }
+
+    /**
+     * Run a callback after a database has been dropped (isolate:teardown).
+     */
+    public function afterDatabaseDropped(Closure|string $callback): static
+    {
+        $this->afterDatabaseDropped[] = $callback;
+
+        return $this;
+    }
+
+    /**
+     * Run a callback after a Redis keyspace has been flushed (isolate:teardown).
+     */
+    public function afterPrefixFlushed(Closure|string $callback): static
+    {
+        $this->afterPrefixFlushed[] = $callback;
 
         return $this;
     }
@@ -356,6 +400,20 @@ class Isolate
         $this->dispatch(new DatabaseCreated($result, $plan));
     }
 
+    public function fireAfterDatabaseDropped(DropResult $result, IsolationPlan $plan): void
+    {
+        $this->fire($this->afterDatabaseDropped, [$result, $plan]);
+
+        $this->dispatch(new DatabaseDropped($result, $plan));
+    }
+
+    public function fireAfterPrefixFlushed(FlushResult $result, IsolationPlan $plan): void
+    {
+        $this->fire($this->afterPrefixFlushed, [$result, $plan]);
+
+        $this->dispatch(new PrefixFlushed($result, $plan));
+    }
+
     public function fireAfterApply(IsolationPlan $plan, ApplyResult $result): void
     {
         $this->fire($this->afterApply, [$plan, $result]);
@@ -366,6 +424,100 @@ class Isolate
     public function fireRestart(IsolationPlan $plan): void
     {
         $this->fire($this->restartCallbacks, [$plan]);
+    }
+
+    /**
+     * The manager that drops per-instance databases for isolate:teardown.
+     */
+    public function databaseDestroyerManager(): DatabaseDestroyerManager
+    {
+        $inspector = $this->databaseInspector();
+
+        return new DatabaseDestroyerManager($this->config(), [
+            new SqliteDatabaseDestroyer($this->files(), $this->databasePath()),
+            new MySqlDatabaseDestroyer($this->app->make('db'), $inspector),
+            new PostgresDatabaseDestroyer($this->app->make('db'), $inspector),
+        ]);
+    }
+
+    /**
+     * The manager that flushes per-instance Redis keyspaces for isolate:teardown.
+     */
+    public function keyspaceFlusherManager(): KeyspaceFlusherManager
+    {
+        return new KeyspaceFlusherManager($this->config(), $this->keyspaceFlusher());
+    }
+
+    /**
+     * Shared "does this database exist?" probe across sqlite/mysql/pgsql.
+     */
+    public function databaseInspector(): DatabaseInspector
+    {
+        return new DatabaseInspector(
+            $this->config(),
+            $this->app->make('db'),
+            $this->files(),
+            $this->databasePath(),
+        );
+    }
+
+    /**
+     * Build the teardown planner for this checkout's recorded number.
+     */
+    public function teardownPlanner(): TeardownPlanner
+    {
+        $currentNumber = $this->currentNumber();
+
+        return new TeardownPlanner(
+            $this->resolver($currentNumber),
+            $this->databaseInspector(),
+            $currentNumber,
+            $this->maxInstances(),
+        );
+    }
+
+    /**
+     * The per-connection Redis flusher. Resolved from the container when bound
+     * (so tests can swap in a fake) and otherwise built with the configured
+     * vanilla base prefixes as hard guards.
+     */
+    protected function keyspaceFlusher(): KeyspaceFlusher
+    {
+        if ($this->app->bound(KeyspaceFlusher::class)) {
+            return $this->app->make(KeyspaceFlusher::class);
+        }
+
+        return new RedisKeyspaceFlusher(
+            new RawRedisConnectionFactory($this->app),
+            $this->protectedRedisPrefixes(),
+        );
+    }
+
+    /**
+     * The vanilla (instance 0) prefix for each keyspace, which must never be
+     * flushed (it would match every instance's keys). Derived through the resolver
+     * so the active instance's own suffix is stripped: reading the live config
+     * would, when the active instance is being torn down, yield that instance's
+     * padded prefix and wrongly protect it from being flushed.
+     *
+     * @return array<int, string>
+     */
+    protected function protectedRedisPrefixes(): array
+    {
+        $resolver = $this->resolver($this->currentNumber());
+        $vanilla = $resolver->resolve(0);
+
+        $prefixes = [];
+
+        foreach ($resolver->redisKeyspaceEnvKeys() as $key) {
+            $value = $vanilla->get($key);
+
+            if (is_string($value) && $value !== '') {
+                $prefixes[] = $value;
+            }
+        }
+
+        return $prefixes;
     }
 
     /**

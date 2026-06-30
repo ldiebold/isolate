@@ -3,16 +3,22 @@
 namespace Ldiebold\Isolate\CollisionDetectors;
 
 use Closure;
-use Illuminate\Contracts\Container\Container;
-use Illuminate\Contracts\Redis\Factory as RedisFactory;
+use Illuminate\Contracts\Foundation\Application;
 use Ldiebold\Isolate\Conflict;
 use Ldiebold\Isolate\Contracts\CollisionDetector;
 use Ldiebold\Isolate\IsolationPlan;
+use Ldiebold\Isolate\Redis\RawRedisConnectionFactory;
 use Throwable;
 
 /**
  * Reports a conflict when keys already exist for a candidate Redis prefix,
- * degrading silently when Redis is unavailable. The probe is injectable.
+ * degrading silently when Redis is unavailable.
+ *
+ * The probe runs a cursor SCAN against a prefix-stripped connection, operating on
+ * absolute keys: phpredis prepends the client prefix to a SCAN match and only
+ * accepts the match through its wrapper (not command('scan', ...)), so probing
+ * the app's normal connection would both double-prefix the pattern and throw.
+ * The probe is injectable for testing.
  */
 class RedisPrefixCollisionDetector implements CollisionDetector
 {
@@ -21,7 +27,7 @@ class RedisPrefixCollisionDetector implements CollisionDetector
      * @param  (Closure(string): (bool|null))|null  $prober
      */
     public function __construct(
-        protected Container $container,
+        protected Application $app,
         protected array $prefixKeys = ['REDIS_PREFIX', 'HORIZON_PREFIX'],
         protected ?Closure $prober = null,
     ) {}
@@ -52,24 +58,25 @@ class RedisPrefixCollisionDetector implements CollisionDetector
 
     protected function realProbe(string $prefix): ?bool
     {
-        if (! $this->container->bound('redis')) {
-            return null;
-        }
-
         try {
-            $factory = $this->container->make('redis');
+            $connection = (new RawRedisConnectionFactory($this->app))->for('default');
 
-            if (! $factory instanceof RedisFactory) {
+            if ($connection === null) {
                 return null;
             }
 
-            $result = $factory->connection()->command('scan', [0, ['match' => $prefix.'*', 'count' => 100]]);
+            $match = $prefix.'*';
+            $cursor = 0;
 
-            if (is_array($result) && isset($result[1]) && is_array($result[1])) {
-                return $result[1] !== [];
-            }
+            do {
+                [$cursor, $keys] = $connection->scan($cursor, $match, 100);
 
-            return is_array($result) ? $result !== [] : null;
+                if ($keys !== []) {
+                    return true;
+                }
+            } while ((string) $cursor !== '0');
+
+            return false;
         } catch (Throwable) {
             return null;
         }

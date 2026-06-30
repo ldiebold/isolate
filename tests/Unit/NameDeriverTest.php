@@ -60,3 +60,69 @@ it('does not strip a suffix that does not match the current instance', function 
         ->and($deriver->stripSuffix('forge_7', null))->toBe('forge_7')
         ->and($deriver->stripSuffix('forge', 0))->toBe('forge');
 });
+
+it('collapses the boundary separator when the base already ends in one', function () {
+    $deriver = new NameDeriver(name: null, appName: null);
+
+    expect($deriver->derive('laravel-database-', 1))->toBe('laravel-database-1')
+        ->and($deriver->derive('laravel_horizon:', 3))->toBe('laravel_horizon:3');
+});
+
+it('does not collapse when the base has no trailing separator', function () {
+    $deriver = new NameDeriver(name: null, appName: null);
+
+    expect($deriver->derive('laravel', 1))->toBe('laravel_1');
+});
+
+it('round-trips a separator-terminated base through derive then strip', function () {
+    $deriver = new NameDeriver(name: null, appName: null);
+
+    $derived = $deriver->derive('laravel-database-', 5);
+
+    expect($derived)->toBe('laravel-database-5')
+        ->and($deriver->stripSuffix($derived, 5))->toBe('laravel-database-')
+        ->and($deriver->derive($deriver->stripSuffix($derived, 5), 5))->toBe('laravel-database-5');
+});
+
+it('recognises the legacy doubled-separator form when stripping', function () {
+    $deriver = new NameDeriver(name: null, appName: null);
+
+    expect($deriver->stripSuffix('laravel-database-_5', 5))->toBe('laravel-database-');
+});
+
+it('zero-pads the suffix to a fixed width', function () {
+    $deriver = new NameDeriver(name: 'fuellox', appName: null);
+
+    expect($deriver->suffix(7, 2))->toBe('_07')
+        ->and($deriver->suffix(7, 3))->toBe('_007')
+        ->and($deriver->suffix(7, 0))->toBe('_7')
+        ->and($deriver->suffix(49, 2))->toBe('_49');
+});
+
+it('derives a fixed-width padded suffix, collapsing the boundary separator', function () {
+    $deriver = new NameDeriver(name: null, appName: null);
+
+    expect($deriver->derive('laravel-database-', 7, 2))->toBe('laravel-database-07')
+        ->and($deriver->derive('forge', 7, 2))->toBe('forge_07');
+});
+
+it('makes padded instance prefixes mutually non-overlapping', function () {
+    $deriver = new NameDeriver(name: null, appName: null);
+
+    $seven = $deriver->derive('laravel-database-', 7, 2);
+    $seventy = $deriver->derive('laravel-database-', 70, 2);
+
+    expect($seven)->toBe('laravel-database-07')
+        ->and($seventy)->toBe('laravel-database-70')
+        ->and(str_starts_with($seventy, $seven))->toBeFalse();
+});
+
+it('round-trips a padded suffix through derive then strip', function () {
+    $deriver = new NameDeriver(name: null, appName: null);
+
+    $derived = $deriver->derive('laravel-database-', 5, 2);
+
+    expect($derived)->toBe('laravel-database-05')
+        ->and($deriver->stripSuffix($derived, 5, 2))->toBe('laravel-database-')
+        ->and($deriver->derive($deriver->stripSuffix($derived, 5, 2), 5, 2))->toBe('laravel-database-05');
+});

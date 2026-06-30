@@ -70,10 +70,22 @@ it('reads a name base from config so n = 0 returns the exact vanilla value', fun
     ];
 
     expect(makeResolver($config)->resolve(0)->get('REDIS_PREFIX'))->toBe('fuellox-database-')
-        ->and(makeResolver($config)->resolve(7)->get('REDIS_PREFIX'))->toBe('fuellox-database-_7');
+        ->and(makeResolver($config)->resolve(7)->get('REDIS_PREFIX'))->toBe('fuellox-database-7');
 });
 
 it('re-derives a config-based name idempotently using the recorded current number', function () {
+    $config = [
+        'database' => ['redis' => ['options' => ['prefix' => 'fuellox-database-7']]],
+        'isolate.resources' => [
+            ['type' => 'name', 'env' => 'REDIS_PREFIX', 'config' => 'database.redis.options.prefix', 'active_when' => 'always'],
+        ],
+    ];
+
+    expect(makeResolver($config, ['currentNumber' => 7])->resolve(7)->get('REDIS_PREFIX'))
+        ->toBe('fuellox-database-7');
+});
+
+it('migrates a legacy doubled-separator prefix to the collapsed form', function () {
     $config = [
         'database' => ['redis' => ['options' => ['prefix' => 'fuellox-database-_7']]],
         'isolate.resources' => [
@@ -82,7 +94,80 @@ it('re-derives a config-based name idempotently using the recorded current numbe
     ];
 
     expect(makeResolver($config, ['currentNumber' => 7])->resolve(7)->get('REDIS_PREFIX'))
-        ->toBe('fuellox-database-_7');
+        ->toBe('fuellox-database-7');
+});
+
+it('zero-pads a redis keyspace prefix so instance numbers cannot overlap', function () {
+    $config = [
+        'database' => ['redis' => ['options' => ['prefix' => 'fuellox-database-']]],
+        'isolate.resources' => [
+            ['type' => 'name', 'env' => 'REDIS_PREFIX', 'config' => 'database.redis.options.prefix', 'keyspace' => 'redis', 'active_when' => 'always'],
+        ],
+    ];
+
+    $seven = makeResolver($config)->resolve(7)->get('REDIS_PREFIX');
+    $seventy = makeResolver($config)->resolve(70)->get('REDIS_PREFIX');
+
+    expect($seven)->toBe('fuellox-database-07')
+        ->and($seventy)->toBe('fuellox-database-70')
+        ->and(str_starts_with($seventy, $seven))->toBeFalse();
+});
+
+it('omits the keyspace suffix at n = 0 (vanilla)', function () {
+    $config = [
+        'database' => ['redis' => ['options' => ['prefix' => 'fuellox-database-']]],
+        'isolate.resources' => [
+            ['type' => 'name', 'env' => 'REDIS_PREFIX', 'config' => 'database.redis.options.prefix', 'keyspace' => 'redis', 'active_when' => 'always'],
+        ],
+    ];
+
+    expect(makeResolver($config)->resolve(0)->get('REDIS_PREFIX'))->toBe('fuellox-database-');
+});
+
+it('re-derives a padded keyspace prefix idempotently using the recorded current number', function () {
+    $config = [
+        'database' => ['redis' => ['options' => ['prefix' => 'fuellox-database-07']]],
+        'isolate.resources' => [
+            ['type' => 'name', 'env' => 'REDIS_PREFIX', 'config' => 'database.redis.options.prefix', 'keyspace' => 'redis', 'active_when' => 'always'],
+        ],
+    ];
+
+    expect(makeResolver($config, ['currentNumber' => 7])->resolve(7)->get('REDIS_PREFIX'))
+        ->toBe('fuellox-database-07');
+});
+
+it('lists the env keys of active redis keyspace resources', function () {
+    $config = [
+        'database' => ['redis' => ['options' => ['prefix' => 'fuellox-database-']]],
+        'isolate.resources' => [
+            ['type' => 'name', 'env' => 'REDIS_PREFIX', 'config' => 'database.redis.options.prefix', 'keyspace' => 'redis', 'active_when' => 'always'],
+            ['type' => 'name', 'env' => 'HORIZON_PREFIX', 'base' => 'horizon-', 'keyspace' => 'redis', 'active_when' => 'always'],
+            ['type' => 'name', 'env' => 'DB_DATABASE', 'config' => 'database.connections.{default}.database', 'active_when' => 'always'],
+        ],
+    ];
+
+    expect(makeResolver($config)->redisKeyspaceEnvKeys())->toBe(['REDIS_PREFIX', 'HORIZON_PREFIX']);
+});
+
+it('lists no keyspace env keys when none are marked', function () {
+    $config = [
+        'isolate.resources' => [
+            ['type' => 'name', 'env' => 'DB_DATABASE', 'config' => 'database.connections.{default}.database', 'active_when' => 'always'],
+        ],
+    ];
+
+    expect(makeResolver($config)->redisKeyspaceEnvKeys())->toBe([]);
+});
+
+it('does not pad a name resource without a keyspace marker', function () {
+    $config = [
+        'database' => ['redis' => ['options' => ['prefix' => 'fuellox-database-']]],
+        'isolate.resources' => [
+            ['type' => 'name', 'env' => 'REDIS_PREFIX', 'config' => 'database.redis.options.prefix', 'active_when' => 'always'],
+        ],
+    ];
+
+    expect(makeResolver($config)->resolve(7)->get('REDIS_PREFIX'))->toBe('fuellox-database-7');
 });
 
 it('normalizes a database identifier and emits the create_database side effect', function () {

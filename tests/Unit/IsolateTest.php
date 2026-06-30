@@ -1,8 +1,13 @@
 <?php
 
+use Illuminate\Support\Facades\Event;
 use Ldiebold\Isolate\ApplyResult;
+use Ldiebold\Isolate\Database\DropResult;
+use Ldiebold\Isolate\Events\DatabaseDropped;
+use Ldiebold\Isolate\Events\PrefixFlushed;
 use Ldiebold\Isolate\Isolate;
 use Ldiebold\Isolate\IsolationPlan;
+use Ldiebold\Isolate\Redis\FlushResult;
 use Ldiebold\Isolate\Tests\Fakes\FakeCollisionDetector;
 use Ldiebold\Isolate\Tests\Fakes\RecordingApplier;
 use Ldiebold\Isolate\Tests\Fakes\RecordingHook;
@@ -68,4 +73,59 @@ it('fires closure and class-string hooks', function () {
 
     expect($closureFired)->toBeTrue()
         ->and($hook->count)->toBe(1);
+});
+
+it('fires afterDatabaseDropped hooks and dispatches the DatabaseDropped event', function () {
+    Event::fake([DatabaseDropped::class]);
+    $fired = false;
+
+    $this->isolate->afterDatabaseDropped(function () use (&$fired): void {
+        $fired = true;
+    });
+
+    $this->isolate->fireAfterDatabaseDropped(
+        DropResult::dropped('forge_7'),
+        new IsolationPlan(7, ['DB_DATABASE' => 'forge_7']),
+    );
+
+    expect($fired)->toBeTrue();
+    Event::assertDispatched(DatabaseDropped::class);
+});
+
+it('fires afterPrefixFlushed hooks and dispatches the PrefixFlushed event', function () {
+    Event::fake([PrefixFlushed::class]);
+    $captured = null;
+
+    $this->isolate->afterPrefixFlushed(function (FlushResult $result, IsolationPlan $plan) use (&$captured): void {
+        $captured = [$result, $plan];
+    });
+
+    $this->isolate->fireAfterPrefixFlushed(
+        FlushResult::flushed('fuellox-database-07', 5),
+        new IsolationPlan(7, ['REDIS_PREFIX' => 'fuellox-database-07']),
+    );
+
+    expect($captured)->not->toBeNull()
+        ->and($captured[0]->keyCount)->toBe(5)
+        ->and($captured[1]->get('REDIS_PREFIX'))->toBe('fuellox-database-07');
+    Event::assertDispatched(PrefixFlushed::class);
+});
+
+it('guards the vanilla redis base, not the active instance prefix, when flushing', function () {
+    // Active instance 3: the live config prefix is the instance's own padded value,
+    // exactly as .env leaves it. The flush guard must protect the n=0 base
+    // (laravel-database-) and NOT the active prefix it is being asked to flush.
+    config()->set('isolate.max_instances', 50);
+    config()->set('database.redis.options.prefix', 'laravel-database-03');
+    config()->set('isolate.resources', [
+        ['type' => 'name', 'env' => 'REDIS_PREFIX', 'config' => 'database.redis.options.prefix', 'keyspace' => 'redis', 'active_when' => 'always'],
+    ]);
+    $_SERVER['ISOLATE_NUMBER'] = '3';
+
+    $method = new ReflectionMethod(Isolate::class, 'protectedRedisPrefixes');
+    $method->setAccessible(true);
+
+    expect($method->invoke($this->isolate))->toBe(['laravel-database-']);
+
+    unset($_SERVER['ISOLATE_NUMBER']);
 });

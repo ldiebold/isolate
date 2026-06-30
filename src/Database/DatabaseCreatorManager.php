@@ -11,18 +11,21 @@ use Ldiebold\Isolate\Contracts\DatabaseCreator;
  */
 class DatabaseCreatorManager
 {
+    protected MaintenanceConnectionFactory $maintenance;
+
     /**
      * @param  array<int, DatabaseCreator>  $creators
      */
     public function __construct(
         protected Repository $config,
         protected array $creators,
-    ) {}
+    ) {
+        $this->maintenance = new MaintenanceConnectionFactory($config);
+    }
 
     public function create(string $connectionName, string $database): CreateResult
     {
-        $connectionConfig = (array) $this->config->get("database.connections.{$connectionName}", []);
-        $driver = (string) ($connectionConfig['driver'] ?? '');
+        $driver = (string) $this->config->get("database.connections.{$connectionName}.driver", '');
 
         $creator = $this->creatorFor($driver);
 
@@ -33,9 +36,7 @@ class DatabaseCreatorManager
             );
         }
 
-        $maintenance = $this->maintenanceConnection($connectionName, $connectionConfig, $driver);
-
-        return $creator->ensureExists($maintenance, $database);
+        return $creator->ensureExists($this->maintenance->for($connectionName), $database);
     }
 
     protected function creatorFor(string $driver): ?DatabaseCreator
@@ -47,23 +48,5 @@ class DatabaseCreatorManager
         }
 
         return null;
-    }
-
-    /**
-     * @param  array<string, mixed>  $config
-     */
-    protected function maintenanceConnection(string $name, array $config, string $driver): ConnectionConfig
-    {
-        $maintenanceName = '__isolate_maintenance_'.$name;
-
-        $config['database'] = match ($driver) {
-            'pgsql' => 'postgres',
-            'mysql', 'mariadb' => null,
-            default => $config['database'] ?? null,
-        };
-
-        $this->config->set("database.connections.{$maintenanceName}", $config);
-
-        return new ConnectionConfig($maintenanceName, $driver, $config);
     }
 }

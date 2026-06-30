@@ -160,11 +160,14 @@ return [
         ],
 
         // Redis prefix: base read from the framework's configured prefix so
-        // n = 0 returns to the exact vanilla value.
+        // n = 0 returns to the exact vanilla value. Marked as a redis keyspace so
+        // the per-instance suffix is fixed-width zero-padded (unambiguous to scan)
+        // and the keys are flushed on `isolate:teardown`.
         [
             'type' => 'name',
             'env' => 'REDIS_PREFIX',
             'config' => 'database.redis.options.prefix',
+            'keyspace' => 'redis',
             'active_when' => ['config' => 'database.redis.options.prefix'],
         ],
 
@@ -174,6 +177,7 @@ return [
             'type' => 'name',
             'env' => 'HORIZON_PREFIX',
             'config' => 'horizon.prefix',
+            'keyspace' => 'redis',
             'active_when' => ['package' => 'laravel/horizon'],
         ],
 

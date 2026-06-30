@@ -2,8 +2,10 @@
 
 use Ldiebold\Isolate\Database\CreateOutcome;
 use Ldiebold\Isolate\Database\DatabaseCreatorManager;
+use Ldiebold\Isolate\Database\DropOutcome;
 use Ldiebold\Isolate\Database\MySqlDatabaseCreator;
 use Ldiebold\Isolate\Database\PostgresDatabaseCreator;
+use Ldiebold\Isolate\Isolate;
 
 /*
  * These tests hit a real database server and are skipped unless INTEGRATION_DB
@@ -57,4 +59,52 @@ it('creates and re-detects a mysql database', function () {
 
     app('db')->connection('__isolate_maintenance_isolate_mysql')
         ->statement('DROP DATABASE IF EXISTS `'.$database.'`');
+})->skip($integrationDisabled, 'INTEGRATION_DB is disabled');
+
+it('creates then tears down a postgres database', function () {
+    config()->set('database.connections.isolate_pg', [
+        'driver' => 'pgsql',
+        'host' => env('ISOLATE_PG_HOST', '127.0.0.1'),
+        'port' => env('ISOLATE_PG_PORT', '5432'),
+        'database' => 'postgres',
+        'username' => env('ISOLATE_PG_USER', 'postgres'),
+        'password' => env('ISOLATE_PG_PASSWORD', ''),
+        'charset' => 'utf8',
+        'prefix' => '',
+        'search_path' => 'public',
+        'sslmode' => 'prefer',
+    ]);
+
+    $database = 'isolate_it_'.uniqid();
+
+    (new DatabaseCreatorManager(app('config'), [new PostgresDatabaseCreator(app('db'))]))
+        ->create('isolate_pg', $database);
+
+    $destroyer = app(Isolate::class)->databaseDestroyerManager();
+
+    expect($destroyer->destroy('isolate_pg', $database)->outcome)->toBe(DropOutcome::Dropped)
+        ->and($destroyer->destroy('isolate_pg', $database)->outcome)->toBe(DropOutcome::Missing);
+})->skip($integrationDisabled, 'INTEGRATION_DB is disabled');
+
+it('creates then tears down a mysql database', function () {
+    config()->set('database.connections.isolate_mysql', [
+        'driver' => 'mysql',
+        'host' => env('ISOLATE_MYSQL_HOST', '127.0.0.1'),
+        'port' => env('ISOLATE_MYSQL_PORT', '3306'),
+        'database' => null,
+        'username' => env('ISOLATE_MYSQL_USER', 'root'),
+        'password' => env('ISOLATE_MYSQL_PASSWORD', ''),
+        'charset' => 'utf8mb4',
+        'prefix' => '',
+    ]);
+
+    $database = 'isolate_it_'.uniqid();
+
+    (new DatabaseCreatorManager(app('config'), [new MySqlDatabaseCreator(app('db'))]))
+        ->create('isolate_mysql', $database);
+
+    $destroyer = app(Isolate::class)->databaseDestroyerManager();
+
+    expect($destroyer->destroy('isolate_mysql', $database)->outcome)->toBe(DropOutcome::Dropped)
+        ->and($destroyer->destroy('isolate_mysql', $database)->outcome)->toBe(DropOutcome::Missing);
 })->skip($integrationDisabled, 'INTEGRATION_DB is disabled');
