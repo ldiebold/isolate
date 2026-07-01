@@ -29,4 +29,16 @@ abstract class TestCase extends Orchestra
             'Isolate' => Isolate::class,
         ];
     }
+
+    /**
+     * Worktree hydration is off by default in tests so command runs stay
+     * deterministic and never shell out to git; the tests that cover it opt in
+     * explicitly (via config or a fake WorktreeLocator).
+     *
+     * @param  Application  $app
+     */
+    protected function getEnvironmentSetUp($app): void
+    {
+        $app['config']->set('isolate.worktree.copy', []);
+    }
 }

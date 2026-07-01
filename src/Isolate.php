@@ -9,12 +9,14 @@ use Illuminate\Foundation\Application;
 use Illuminate\Support\Env;
 use Ldiebold\Isolate\Appliers\DatabaseCreatorApplier;
 use Ldiebold\Isolate\Appliers\DotenvApplier;
+use Ldiebold\Isolate\Appliers\WorktreeCopyApplier;
 use Ldiebold\Isolate\Claims\SelfClaimProvider;
 use Ldiebold\Isolate\CollisionDetectors\DatabaseCollisionDetector;
 use Ldiebold\Isolate\CollisionDetectors\PortCollisionDetector;
 use Ldiebold\Isolate\CollisionDetectors\RedisPrefixCollisionDetector;
 use Ldiebold\Isolate\Contracts\Applier;
 use Ldiebold\Isolate\Contracts\CollisionDetector;
+use Ldiebold\Isolate\Contracts\DirectoryCopier;
 use Ldiebold\Isolate\Contracts\EnvWriter;
 use Ldiebold\Isolate\Contracts\KeyspaceFlusher;
 use Ldiebold\Isolate\Contracts\Lock;
@@ -51,6 +53,7 @@ use Ldiebold\Isolate\Support\ResourceActivator;
 use Ldiebold\Isolate\Support\RestrictedPorts;
 use Ldiebold\Isolate\Support\SqlitePath;
 use Ldiebold\Isolate\Support\TemplateResolver;
+use Ldiebold\Isolate\Support\WorktreeLocator;
 use Ldiebold\Isolate\Teardown\TeardownPlanner;
 
 /**
@@ -109,6 +112,11 @@ class Isolate
      * @var array<int, Closure|class-string>
      */
     protected array $restartCallbacks = [];
+
+    /**
+     * @var (Closure(string): void)|null
+     */
+    protected ?Closure $copyProgress = null;
 
     public function __construct(protected Application $app) {}
 
@@ -202,6 +210,19 @@ class Isolate
     public function restartUsing(Closure|string $callback): static
     {
         $this->restartCallbacks[] = $callback;
+
+        return $this;
+    }
+
+    /**
+     * Receive progress messages while worktree files are copied (e.g. to echo a
+     * "Copying node_modules …" line during an otherwise blocking copy).
+     *
+     * @param  Closure(string): void  $callback
+     */
+    public function copyProgressUsing(Closure $callback): static
+    {
+        $this->copyProgress = $callback;
 
         return $this;
     }
@@ -603,6 +624,7 @@ class Isolate
     protected function appliers(): array
     {
         return [
+            $this->worktreeCopyApplier(),
             $this->dotenvApplier(),
             $this->databaseCreatorApplier(),
             ...$this->registeredAppliers(),
@@ -627,6 +649,32 @@ class Isolate
             new RedisPrefixCollisionDetector($this->app),
             ...$this->registeredCollisionDetectors(),
         ];
+    }
+
+    protected function worktreeCopyApplier(): WorktreeCopyApplier
+    {
+        return new WorktreeCopyApplier(
+            $this->app->make(WorktreeLocator::class),
+            $this->app->make(DirectoryCopier::class),
+            $this->files(),
+            $this->app->basePath(),
+            $this->worktreeCopyPaths(),
+            $this->copyProgress,
+        );
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function worktreeCopyPaths(): array
+    {
+        $configured = $this->config()->get('isolate.worktree.copy', ['.env', 'node_modules']);
+
+        if (! is_array($configured)) {
+            return [];
+        }
+
+        return array_values(array_filter($configured, 'is_string'));
     }
 
     protected function dotenvApplier(): DotenvApplier

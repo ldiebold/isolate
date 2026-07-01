@@ -173,6 +173,48 @@ Vanilla Laravel's `serve` (8000) and Reverb (8080) are only 80 apart and would *
 validation at `band_size = 100`. The shipped map therefore spaces Reverb at **8100**. If you
 add resources, keep their bases ≥ `band_size` apart (or lower `band_size`).
 
+### Worktree file hydration
+
+A fresh `git worktree add` only checks out tracked files, so the gitignored artifacts an app
+needs to run — `node_modules`, and often a real `.env` — are missing. When `isolate` runs inside
+a **linked worktree** it copies them from the **origin** (the main worktree it was created from),
+so you skip a reinstall:
+
+```php
+'worktree' => [
+    'copy' => ['.env', 'node_modules'],
+],
+```
+
+- **Copy-if-missing.** Existing paths are never overwritten, so re-runs are no-ops and anything
+  already placed by your tooling is left alone.
+- **Runs before `.env` is written.** A copied `.env` keeps the origin's real values and isolate
+  layers the per-instance ports/prefixes on top — real secrets *and* an isolated footprint.
+- **Only inside a linked worktree.** In the main repo or a plain clone it does nothing. Missing
+  origin paths are skipped silently; a failed copy degrades to a warning and never fails the run.
+- Paths are literal and repo-root-relative (files or directories); entries that are absolute or
+  escape the project with `..` are refused. The native `cp`/`robocopy` is used for speed with a
+  portable PHP fallback (Linux, macOS, Windows).
+
+Set `'copy' => []` to disable it, or pass `--no-copy` for a one-off skip.
+
+**`vendor` is intentionally not in the list.** `isolate` is `php artisan`, which cannot boot
+without `vendor/autoload.php`, so vendor must already exist by the time it runs — copy-if-missing
+would only ever skip it. Install it from your worktree-creation step instead:
+
+```bash
+git worktree add ../app-feature-x
+cd ../app-feature-x
+composer install        # vendor must exist before artisan can run
+php artisan isolate      # hydrates node_modules (+ .env) and claims an instance number
+```
+
+If your worktrees are created by a tool (an "on workspace created" hook), put `composer install`
+there before `isolate`. `composer install` is also *correct* — it matches this worktree's own
+`composer.lock`. If you would rather copy `vendor` to save the install time, do it in that same
+hook (`cp -a ../origin/vendor vendor`), understanding the trade-off: a copied `vendor`/`node_modules`
+is stale if the branch changed its lockfile, and assumes the same machine/platform.
+
 ### Extending
 
 Config stays pure data; anything involving closures or runtime objects is registered on the

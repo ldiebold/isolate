@@ -76,6 +76,32 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Worktree File Hydration
+    |--------------------------------------------------------------------------
+    |
+    | When `isolate` runs inside a linked git worktree, these paths are copied
+    | (if missing) from the origin repository this worktree was created from -
+    | the gitignored artifacts a fresh `git worktree add` does not carry over.
+    | Copy-if-missing: existing paths are never overwritten. The copy runs
+    | before the .env is written, so a copied .env keeps its real values and
+    | isolate layers the per-instance ports/prefixes on top. Set to an empty
+    | array to disable, or pass --no-copy for a one-off skip.
+    |
+    | `vendor` is intentionally omitted: `isolate` cannot boot without it, so
+    | it must already exist by the time this runs. Install it (or copy it) from
+    | your worktree-creation step instead - see the README.
+    |
+    */
+
+    'worktree' => [
+        'copy' => [
+            '.env',
+            'node_modules',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Conflict Policy
     |--------------------------------------------------------------------------
     |

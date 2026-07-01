@@ -2,17 +2,22 @@
 
 namespace Ldiebold\Isolate;
 
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\ServiceProvider;
 use Ldiebold\Isolate\Console\IsolateCommand;
 use Ldiebold\Isolate\Console\ListCommand;
 use Ldiebold\Isolate\Console\StatusCommand;
 use Ldiebold\Isolate\Console\TeardownCommand;
+use Ldiebold\Isolate\Contracts\DirectoryCopier;
 use Ldiebold\Isolate\Contracts\EnvWriter;
 use Ldiebold\Isolate\Contracts\PackageDetector;
 use Ldiebold\Isolate\Contracts\PortChecker;
 use Ldiebold\Isolate\Env\LineDotenvWriter;
 use Ldiebold\Isolate\PortCheckers\BindPortChecker;
 use Ldiebold\Isolate\Support\ComposerPackageDetector;
+use Ldiebold\Isolate\Support\PhpDirectoryCopier;
+use Ldiebold\Isolate\Support\SystemDirectoryCopier;
+use Ldiebold\Isolate\Support\WorktreeLocator;
 
 class IsolateServiceProvider extends ServiceProvider
 {
@@ -51,5 +56,13 @@ class IsolateServiceProvider extends ServiceProvider
         $this->app->bind(PackageDetector::class, ComposerPackageDetector::class);
         $this->app->bind(EnvWriter::class, LineDotenvWriter::class);
         $this->app->bind(PortChecker::class, BindPortChecker::class);
+
+        $this->app->bind(DirectoryCopier::class, static function ($app): SystemDirectoryCopier {
+            $files = $app->make(Filesystem::class);
+
+            return new SystemDirectoryCopier($files, new PhpDirectoryCopier($files));
+        });
+
+        $this->app->bind(WorktreeLocator::class, static fn ($app): WorktreeLocator => new WorktreeLocator($app->basePath()));
     }
 }

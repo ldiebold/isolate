@@ -20,7 +20,8 @@ class IsolateCommand extends Command
         {--reset : Forced return to instance 0 (vanilla)}
         {--migrate : Run migrations after isolating}
         {--seed : Seed the database after isolating (implies --migrate)}
-        {--restart : Fire registered restart hooks after applying}';
+        {--restart : Fire registered restart hooks after applying}
+        {--no-copy : Skip copying worktree files (node_modules, .env) from the origin}';
 
     protected $description = 'Isolate this checkout: pick an instance number and write disjoint ports, prefixes and database name.';
 
@@ -33,6 +34,12 @@ class IsolateCommand extends Command
         if (! $this->numberOptionIsValid($isolate->maxInstances())) {
             return self::FAILURE;
         }
+
+        if ($this->option('no-copy')) {
+            config(['isolate.worktree.copy' => []]);
+        }
+
+        $isolate->copyProgressUsing(fn (string $message) => $this->line('  '.$message));
 
         try {
             $result = $isolate->run($this->request());
