@@ -1,7 +1,7 @@
 {
     "name": "ldiebold/isolate",
     "description": "Isolate one Laravel checkout's runtime footprint (ports, prefixes, database name) from sibling checkouts of the same app.",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "keywords": ["laravel", "isolation", "ports", "worktree", "dev-environment"],
     "license": "MIT",
     "support": {
